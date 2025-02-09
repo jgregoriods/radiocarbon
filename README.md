@@ -1,5 +1,8 @@
 # Radiocarbon Date Calibration and Analysis
 
+![PyPI](https://img.shields.io/pypi/v/radiocarbon)
+![PyPI - Downloads](https://img.shields.io/pypi/dm/radiocarbon)
+
 This package provides tools for calibrating radiocarbon dates, calculating Summed Probability Distributions (SPDs), and performing statistical tests on SPDs using simulated data.
 
 ## Features
