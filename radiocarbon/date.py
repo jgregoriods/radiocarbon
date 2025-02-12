@@ -245,3 +245,51 @@ class Dates:
         """
         return iter(self.dates)
 
+
+class Bins:
+    """
+    Represents a collection of radiocarbon dates binned by a specified bin size.
+
+    Attributes:
+        dates (Dates): A Dates object containing the radiocarbon dates.
+        labels (List[str]): A list of labels (ideally site names) corresponding to each date.
+        bin_size (int): Size of the bins in years.
+        bins (Dates): A Dates object containing the binned radiocarbon dates.
+    """
+    def __init__(self, dates: Dates, labels: List[str], bin_size: int = 100):
+        """
+        Initializes a collection of binned radiocarbon dates.
+
+        Args:
+            dates (Dates): A Dates object containing the radiocarbon dates.
+            labels (List[str]): A list of labels (ideally site names) corresponding to each date.
+            bin_size (int): Size of the bins in years.
+        """
+        self.dates = dates
+        self.labels = labels
+        self.bin_size = bin_size
+        self.bins = self._bin_dates()
+
+    def _bin_dates(self) -> Dates:
+        """
+        Bins the radiocarbon dates.
+
+        Returns:
+            Dates: A Dates object containing the binned radiocarbon dates.
+        """
+        sites = {}
+        for i, label in enumerate(self.labels):
+            if label not in sites:
+                sites[label] = {}
+            bin_key = self.dates[i].c14age // self.bin_size
+            if bin_key not in sites[label]:
+                sites[label][bin_key] = []
+            sites[label][bin_key].append(self.dates[i])
+        filtered_ages = []
+        filtered_errors = []
+        for label in sites:
+            for bin_key in sites[label]:
+                filtered_ages.append(sites[label][bin_key][0].c14age)
+                filtered_errors.append(sites[label][bin_key][0].c14sd)
+        return Dates(filtered_ages, filtered_errors)
+

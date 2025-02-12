@@ -92,9 +92,9 @@ class SimSPD:
             date_range: Tuple[int, int],
             n_dates: int,
             n_iter: int = 1000,
-            errors = List[int],
+            errors: List[int] = None,
             model: str = 'exp',
-            lam: float = 1
+            lam: float = 1.0
     ):
         """
         Initializes the SimSPD instance.
@@ -119,6 +119,8 @@ class SimSPD:
         self.lam = lam
         self.errors = errors
         self.spds: List[SPD] = []
+        self.prob_matrix: Optional[np.ndarray] = None
+        self.summary_stats: Optional[np.ndarray] = None
 
     def _generate_random_dates(self) -> List[Date]:
         """
@@ -137,9 +139,9 @@ class SimSPD:
         # Exponential model
         elif self.model == 'exp':
             probs = np.exp(-self.lam * np.arange(self.date_range[0], self.date_range[1]))
+            probs /= probs.sum()
             years = np.random.choice(
-                np.arange(self.date_range[0], self.date_range[1]), self.n_dates, replace=True,
-                p=probs / probs.sum()
+                np.arange(self.date_range[0], self.date_range[1]), self.n_dates, replace=True, p=probs
             )
 
         # Unsupported model
@@ -150,16 +152,13 @@ class SimSPD:
         c14ages = [curve[np.argmin(np.abs(curve[:, 0] - year)), 1] for year in years]
 
         # Randomly sample errors
-        errors = np.random.choice(self.errors, self.n_dates)
+        errors = np.random.choice(self.errors, self.n_dates) if self.errors else np.random.randint(0, 100, self.n_dates)
 
         return [Date(c14age, error) for c14age, error in zip(c14ages, errors)]
 
     def simulate_spds(self) -> np.ndarray:
         """
         Simulates SPDs and calculates percentile bounds.
-
-        Returns:
-            np.ndarray: A 2D array with age range, lower percentile, and upper percentile.
         """
         self.spds = [self._create_spd(self._generate_random_dates())
                      for _ in range(self.n_iter)]
@@ -168,12 +167,8 @@ class SimSPD:
         max_age = max(spd.summed[-1, 0] for spd in self.spds)
         age_range = np.arange(min_age, max_age)
 
-        prob_matrix = self._create_probability_matrix(age_range)
-
-        lower_percentile = np.percentile(prob_matrix[:, 1:], 2.5, axis=1)
-        upper_percentile = np.percentile(prob_matrix[:, 1:], 97.5, axis=1)
-
-        return np.column_stack((age_range, lower_percentile, upper_percentile))
+        self.prob_matrix = self._create_probability_matrix(age_range)
+        self.summary_stats = self._calculate_stats(self.prob_matrix)
 
     def _create_spd(self, dates: List[Date]) -> SPD:
         """
@@ -208,6 +203,20 @@ class SimSPD:
             )
 
         return prob_matrix
+    
+    def _calculate_stats(self, prob_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Calculates summary statistics (mean and standard deviation) for the probability matrix.
+
+        Args:
+            prob_matrix (np.ndarray): A 2D matrix with probabilities for each SPD.
+
+        Returns:
+            np.ndarray: A 2D array with mean and standard deviation for each age.
+        """
+        means = np.mean(prob_matrix[:, 1:], axis=1)
+        stds = np.std(prob_matrix[:, 1:], axis=1)
+        return np.column_stack((means, stds))
 
 
 class SPDTest:
@@ -232,7 +241,7 @@ class SPDTest:
                 "The provided SPD must have its probabilities summed.")
 
         self.spd = spd
-        self.simulations: Optional[np.ndarray] = None
+        self.simulations: Optional[SimSPD] = None
 
         self.date_range = date_range if date_range else (
             int(min(date.median() for date in spd.dates)),
@@ -240,8 +249,16 @@ class SPDTest:
         )
 
         self.n_dates = len(spd.dates)
+        self.n_iter = 0
+        self.intervals: Dict[str, List[Tuple[int, int]]] = {}
+        self.model = None
 
-    def simulate(self, n_iter: int = 1000, model: str = 'exp') -> None:
+        self.lower_percentile = None
+        self.upper_percentile = None
+
+        self.p_value = None
+
+    def run_test(self, n_iter: int = 1000, model: str = 'exp') -> None:
         """
         Runs simulations using the same time range and number of dates as the real SPD.
 
@@ -258,7 +275,7 @@ class SPDTest:
             y = probs[(ages > self.date_range[0]) & (ages < self.date_range[1])]
 
             lam = -np.polyfit(x, np.log(y), 1)[0]
-            sim_spd = SimSPD(
+            self.simulations = SimSPD(
                 date_range=self.date_range,
                 n_dates=self.n_dates,
                 n_iter=n_iter,
@@ -267,7 +284,7 @@ class SPDTest:
                 lam=lam
             )
         elif model == 'uniform':
-            sim_spd = SimSPD(
+            self.simulations = SimSPD(
                 date_range=self.date_range,
                 n_dates=self.n_dates,
                 n_iter=n_iter,
@@ -277,9 +294,29 @@ class SPDTest:
         else:
             raise ValueError("Model not supported yet. Choose between 'uniform' and 'exp'.")
 
-        self.simulations = sim_spd.simulate_spds()
+        self.model = model
+        self.n_iter = n_iter
+        self.simulations.simulate_spds()
+        self.intervals["above"], self.intervals["below"] = self._extract_intervals()
+        self.p_value = self._calculate_p_value()
 
-    def _extract_intervals(self):
+    def _get_percentile_bounds(self, prob_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Calculates the lower and upper percentile bounds for the simulated SPDs.
+
+        Args:
+            prob_matrix (np.ndarray): A 2D matrix with probabilities for each SPD.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: A tuple containing:
+                - lower_percentile: Lower percentile bounds.
+                - upper_percentile: Upper percentile bounds.
+        """
+        lower_percentile = np.percentile(prob_matrix[:, 1:], 2.5, axis=1)
+        upper_percentile = np.percentile(prob_matrix[:, 1:], 97.5, axis=1)
+        return lower_percentile, upper_percentile
+
+    def _extract_intervals(self) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
         """
         Identifies intervals where the observed SPD is above or below the confidence envelope.
 
@@ -290,8 +327,12 @@ class SPDTest:
         """
         observed_ages = self.spd.summed[:, 0]
         observed_probs = self.spd.summed[:, 1]
-        lower_ci = np.interp(observed_ages, self.simulations[:, 0], self.simulations[:, 1])
-        upper_ci = np.interp(observed_ages, self.simulations[:, 0], self.simulations[:, 2])
+
+        age_range = self.simulations.prob_matrix[:, 0]
+        self.lower_percentile, self.upper_percentile = self._get_percentile_bounds(self.simulations.prob_matrix)
+
+        lower_ci = np.interp(observed_ages, age_range, self.lower_percentile)
+        upper_ci = np.interp(observed_ages, age_range, self.upper_percentile)
 
         above_intervals, below_intervals = [], []
         current_interval = []
@@ -327,6 +368,40 @@ class SPDTest:
 
         return above_intervals, below_intervals
 
+    def _calculate_p_value(self):
+        """
+        Calculates the p-value for the observed SPD. The p-value is the proportion of
+        simulated SPDs with a sum of z-scores in the significant regions that is greater
+        than the sum of z-scores for the observed SPD (Timpson et al., 2014).
+
+        Returns:
+            float: The p-value for the observed SPD.
+        """
+        indices = np.where((self.spd.summed[:, 0] > self.date_range[0]) & (self.spd.summed[:, 0] < self.date_range[1]))[0]
+        observed_ages = self.spd.summed[:, 0][indices]
+        observed_probs = self.spd.summed[:, 1][indices]
+
+        sim_indices = np.where((self.simulations.prob_matrix[:, 0] > self.date_range[0]) & (self.simulations.prob_matrix[:, 0] < self.date_range[1]))[0]
+        prob_matrix = self.simulations.prob_matrix[sim_indices, :]
+        age_range = prob_matrix[:, 0]
+        mean, std = self.simulations.summary_stats[:, 0][sim_indices], self.simulations.summary_stats[:, 1][sim_indices]
+
+        interp_mean = np.interp(observed_ages, age_range, mean)
+        interp_std = np.interp(observed_ages, age_range, std)
+
+        observed_z_scores = np.abs((observed_probs - interp_mean) / interp_std)
+        observed_z_sum = np.sum(observed_z_scores[observed_z_scores > 1.96])
+
+        score_sums = []
+        for i in range(self.n_iter):
+            sim_spd = prob_matrix[:, i + 1]
+            z_scores = np.abs((sim_spd - mean) / std)
+            z_sum = np.sum(z_scores[z_scores > 1.96])
+            score_sums.append(z_sum)
+
+        p_val = np.mean(np.array(score_sums) > observed_z_sum)
+        return p_val
+
     def plot(self):
         """
         Plots the real SPD overlaid on the simulated confidence intervals.
@@ -336,9 +411,9 @@ class SPDTest:
 
         # Plot confidence intervals
         plt.fill_between(
-            self.simulations[:, 0],  # Age range
-            self.simulations[:, 1],  # Lower CI
-            self.simulations[:, 2],  # Upper CI
+            self.simulations.prob_matrix[:, 0],  # Age range
+            self.lower_percentile,  # Lower CI
+            self.upper_percentile,  # Upper CI
             color="lightgray",
             label="95% CI",
         )
@@ -351,7 +426,7 @@ class SPDTest:
             label="SPD",
         )
 
-        above_intervals, below_intervals = self._extract_intervals()
+        above_intervals, below_intervals = self.intervals["above"], self.intervals["below"]
 
         # Highlight above intervals in red (only add one legend entry)
         for i, (start, end) in enumerate(above_intervals):
@@ -382,4 +457,26 @@ class SPDTest:
         plt.title("SPD with Simulated Confidence Intervals")
         plt.legend()
         plt.show()
+
+    def __repr__(self) -> str:
+        """
+        Returns the string representation of the SPDTest instance.
+
+        Returns:
+            str: The string representation of the SPDTest object.
+        """
+        positive_intervals = ', '.join(
+            f"{int(start)} BP - {int(end)} BP" for start, end in self.intervals['above'] if self.date_range[0] <= start <= self.date_range[1] or self.date_range[0] <= end <= self.date_range[1]
+        )
+        negative_intervals = ', '.join(
+            f"{int(start)} BP - {int(end)} BP" for start, end in self.intervals['below'] if self.date_range[0] <= start <= self.date_range[1] or self.date_range[0] <= end <= self.date_range[1]
+        )
+        return f"SPD Model Test\n----------------\n" \
+               f"Model: {self.model}\n" \
+               f"Number of dates: {self.n_dates}\n" \
+               f"Number of simulations: {self.n_iter}\n" \
+               f"Date range: {self.date_range[0]} - {self.date_range[1]} BP\n" \
+               f"Positive deviations: {positive_intervals}\n" \
+               f"Negative deviations: {negative_intervals}\n" \
+               f"Global p-value: {self.p_value}"
 
