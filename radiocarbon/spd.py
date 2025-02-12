@@ -92,9 +92,9 @@ class SimSPD:
             date_range: Tuple[int, int],
             n_dates: int,
             n_iter: int = 1000,
-            errors = List[int],
+            errors: List[int] = None,
             model: str = 'exp',
-            lam: float = 1
+            lam: float = 1.0
     ):
         """
         Initializes the SimSPD instance.
@@ -139,9 +139,9 @@ class SimSPD:
         # Exponential model
         elif self.model == 'exp':
             probs = np.exp(-self.lam * np.arange(self.date_range[0], self.date_range[1]))
+            probs /= probs.sum()
             years = np.random.choice(
-                np.arange(self.date_range[0], self.date_range[1]), self.n_dates, replace=True,
-                p=probs / probs.sum()
+                np.arange(self.date_range[0], self.date_range[1]), self.n_dates, replace=True, p=probs
             )
 
         # Unsupported model
@@ -152,16 +152,13 @@ class SimSPD:
         c14ages = [curve[np.argmin(np.abs(curve[:, 0] - year)), 1] for year in years]
 
         # Randomly sample errors
-        errors = np.random.choice(self.errors, self.n_dates)
+        errors = np.random.choice(self.errors, self.n_dates) if self.errors else np.random.randint(0, 100, self.n_dates)
 
         return [Date(c14age, error) for c14age, error in zip(c14ages, errors)]
 
     def simulate_spds(self) -> np.ndarray:
         """
         Simulates SPDs and calculates percentile bounds.
-
-        Returns:
-            np.ndarray: A 2D array with age range, lower percentile, and upper percentile.
         """
         self.spds = [self._create_spd(self._generate_random_dates())
                      for _ in range(self.n_iter)]
@@ -208,8 +205,18 @@ class SimSPD:
         return prob_matrix
     
     def _calculate_stats(self, prob_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        summary_stats = np.column_stack((np.mean(prob_matrix[:, 1:], axis=1), np.std(prob_matrix[:, 1:], axis=1)))
-        return summary_stats
+        """
+        Calculates summary statistics (mean and standard deviation) for the probability matrix.
+
+        Args:
+            prob_matrix (np.ndarray): A 2D matrix with probabilities for each SPD.
+
+        Returns:
+            np.ndarray: A 2D array with mean and standard deviation for each age.
+        """
+        means = np.mean(prob_matrix[:, 1:], axis=1)
+        stds = np.std(prob_matrix[:, 1:], axis=1)
+        return np.column_stack((means, stds))
 
 
 class SPDTest:
@@ -249,7 +256,9 @@ class SPDTest:
         self.lower_percentile = None
         self.upper_percentile = None
 
-    def simulate(self, n_iter: int = 1000, model: str = 'exp') -> None:
+        self.p_value = None
+
+    def run_test(self, n_iter: int = 1000, model: str = 'exp') -> None:
         """
         Runs simulations using the same time range and number of dates as the real SPD.
 
@@ -289,6 +298,7 @@ class SPDTest:
         self.n_iter = n_iter
         self.simulations.simulate_spds()
         self.intervals["above"], self.intervals["below"] = self._extract_intervals()
+        self.p_value = self._calculate_p_value()
 
     def _get_percentile_bounds(self, prob_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -306,7 +316,7 @@ class SPDTest:
         upper_percentile = np.percentile(prob_matrix[:, 1:], 97.5, axis=1)
         return lower_percentile, upper_percentile
 
-    def _extract_intervals(self):
+    def _extract_intervals(self) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
         """
         Identifies intervals where the observed SPD is above or below the confidence envelope.
 
@@ -358,43 +368,38 @@ class SPDTest:
 
         return above_intervals, below_intervals
 
-    def _calculate_z_score(self, probs: np.ndarray, means: np.ndarray, stds: np.ndarray) -> np.ndarray:
-        """
-        Calculates the z-score for each probability density.
-
-        Args:
-            probs (np.ndarray): Array of probability densities.
-            means (np.ndarray): Array of mean probabilities.
-            stds (np.ndarray): Array of standard deviations.
-
-        Returns:
-            np.ndarray: Array of z-scores.
-        """
-        return (probs - means) / stds
-
     def _calculate_p_value(self):
         """
-        Calculates the p-value for the observed SPD.
-        """
-        score_sums = []
-        mean, std = self.simulations.summary_stats[:, 0], self.simulations.summary_stats[:, 1]
-        for i in range(self.n_iter):
-            sim_spd = self.simulations.prob_matrix[:, i + 1]
-            z_scores = np.abs(self._calculate_z_score(sim_spd, mean, std))
-            z_sum = np.sum(z_scores[z_scores > 1.96])
-            score_sums.append(z_sum)
+        Calculates the p-value for the observed SPD. The p-value is the proportion of
+        simulated SPDs with a sum of z-scores in the significant regions that is greater
+        than the sum of z-scores for the observed SPD (Timpson et al., 2014).
 
-        age_range = self.simulations.prob_matrix[:, 0]
-        observed_ages = self.spd.summed[:, 0]
-        observed_probs = self.spd.summed[:, 1]
+        Returns:
+            float: The p-value for the observed SPD.
+        """
+        indices = np.where((self.spd.summed[:, 0] > self.date_range[0]) & (self.spd.summed[:, 0] < self.date_range[1]))[0]
+        observed_ages = self.spd.summed[:, 0][indices]
+        observed_probs = self.spd.summed[:, 1][indices]
+
+        sim_indices = np.where((self.simulations.prob_matrix[:, 0] > self.date_range[0]) & (self.simulations.prob_matrix[:, 0] < self.date_range[1]))[0]
+        prob_matrix = self.simulations.prob_matrix[sim_indices, :]
+        age_range = prob_matrix[:, 0]
+        mean, std = self.simulations.summary_stats[:, 0][sim_indices], self.simulations.summary_stats[:, 1][sim_indices]
 
         interp_mean = np.interp(observed_ages, age_range, mean)
         interp_std = np.interp(observed_ages, age_range, std)
-        observed_z_scores = np.abs(self._calculate_z_score(self.spd.summed[:, 1], interp_mean, interp_std))
+
+        observed_z_scores = np.abs((observed_probs - interp_mean) / interp_std)
         observed_z_sum = np.sum(observed_z_scores[observed_z_scores > 1.96])
 
-        p_val = np.mean(np.array(score_sums) > observed_z_sum)
+        score_sums = []
+        for i in range(self.n_iter):
+            sim_spd = prob_matrix[:, i + 1]
+            z_scores = np.abs((sim_spd - mean) / std)
+            z_sum = np.sum(z_scores[z_scores > 1.96])
+            score_sums.append(z_sum)
 
+        p_val = np.mean(np.array(score_sums) > observed_z_sum)
         return p_val
 
     def plot(self):
@@ -453,9 +458,12 @@ class SPDTest:
         plt.legend()
         plt.show()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
         Returns the string representation of the SPDTest instance.
+
+        Returns:
+            str: The string representation of the SPDTest object.
         """
         positive_intervals = ', '.join(
             f"{int(start)} BP - {int(end)} BP" for start, end in self.intervals['above'] if self.date_range[0] <= start <= self.date_range[1] or self.date_range[0] <= end <= self.date_range[1]
@@ -469,5 +477,6 @@ class SPDTest:
                f"Number of simulations: {self.n_iter}\n" \
                f"Date range: {self.date_range[0]} - {self.date_range[1]} BP\n" \
                f"Positive deviations: {positive_intervals}\n" \
-               f"Negative deviations: {negative_intervals}"
+               f"Negative deviations: {negative_intervals}\n" \
+               f"Global p-value: {self.p_value}"
 
