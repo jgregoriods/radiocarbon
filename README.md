@@ -26,7 +26,7 @@ pip install radiocarbon
 
 ### Calibrating Radiocarbon Dates
 
-```
+```python
 from radiocarbon import Date, Dates
 
 # Create a single radiocarbon date
@@ -43,7 +43,7 @@ date.plot()
 
 Supposing you have a CSV file with radiocarbon dates, you can read the file and calibrate the dates as follows:
 
-```
+```python
 import pandas as pd
 from radiocarbon import Dates
 
@@ -57,7 +57,7 @@ dates.calibrate()
 
 ### Calculating Summed Probability Distributions (SPDs)
 
-```
+```python
 from radiocarbon import SPD
 
 # Create an SPD from a collection of dates
@@ -70,7 +70,7 @@ spd.plot()
 
 ### Simulating SPDs and Testing
 
-```
+```python
 from radiocarbon import SPDTest
 
 # Test an observed SPD against simulations
@@ -83,7 +83,7 @@ spd_test.plot()
 
 Binning can be performed to account for oversampling.
 
-```
+```python
 from radiocarbon import Dates, Bins, SPD
 
 # Create a Dates object
