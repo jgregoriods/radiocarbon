@@ -16,29 +16,29 @@ class Date:
                                          [calibrated age, probability, normalized probability].
     """
 
-    def __init__(self, c14age: int, c14sd: int):
+    def __init__(self, c14age: int, c14sd: int, curve: Optional[str] = 'intcal20'):
         """
         Initializes a radiocarbon date.
 
         Args:
             c14age (int): Radiocarbon age in years BP.
             c14sd (int): Standard deviation of the radiocarbon age.
-        """
-        self.c14age = c14age
-        self.c14sd = c14sd
-        self.cal_date: Optional[np.ndarray] = None
-
-    def calibrate(self, curve: Optional[str] = 'intcal20') -> None:
-        """
-        Calibrates the radiocarbon date against a specified calibration curve.
-
-        Args:
             curve (Optional[str]): Name of the calibration curve to use. Defaults to 'intcal20'.
         """
+
         if curve not in CALIBRATION_CURVES:
             raise ValueError(f"Curve '{curve}' is not available.")
 
-        calibration_curve = CALIBRATION_CURVES[curve]
+        self.c14age = c14age
+        self.c14sd = c14sd
+        self.curve = curve
+        self.cal_date: Optional[np.ndarray] = None
+
+    def calibrate(self) -> None:
+        """
+        Calibrates the radiocarbon date.
+        """
+        calibration_curve = CALIBRATION_CURVES[self.curve]
         time_range = (self.c14age + 1000, self.c14age - 1000)
 
         # Select the relevant portion of the calibration curve
@@ -210,16 +210,15 @@ class Dates:
         if curves is not None and len(c14ages) != len(curves):
             raise ValueError("The number of curves must match the number of radiocarbon dates.")
 
-        self.dates = [Date(age, sd) for age, sd in zip(c14ages, c14sds)]
-        self.curves = curves
+        self.curves = curves if curves is not None else ['intcal20'] * len(c14ages)
+        self.dates = [Date(age, sd, curve) for age, sd, curve in zip(c14ages, c14sds, self.curves)]
 
     def calibrate(self) -> None:
         """
         Calibrates all radiocarbon dates in the collection.
         """
-        for i, date in enumerate(self.dates):
-            curve = 'intcal20' if self.curves is None else self.curves[i]
-            date.calibrate(curve)
+        for date in self.dates:
+            date.calibrate()
 
     def __getitem__(self, i: int) -> Date:
         """
@@ -287,9 +286,11 @@ class Bins:
             sites[label][bin_key].append(self.dates[i])
         filtered_ages = []
         filtered_errors = []
+        filtered_curves = []
         for label in sites:
             for bin_key in sites[label]:
                 filtered_ages.append(sites[label][bin_key][0].c14age)
                 filtered_errors.append(sites[label][bin_key][0].c14sd)
-        return Dates(filtered_ages, filtered_errors)
+                filtered_curves.append(sites[label][bin_key][0].curve)
+        return Dates(filtered_ages, filtered_errors, filtered_curves)
 

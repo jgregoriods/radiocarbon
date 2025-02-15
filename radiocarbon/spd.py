@@ -84,6 +84,7 @@ class SimSPD:
         model (str): Model for date generation ('uniform' or 'exp').
         lam (float): Lambda parameter for the exponential model.
         errors (List[int]): List of errors for simulated dates.
+        curves (List[str]): List of calibration curves to use.
         spds (List[SPD]): List of simulated SPDs.
     """
 
@@ -93,6 +94,7 @@ class SimSPD:
             n_dates: int,
             n_iter: int = 1000,
             errors: List[int] = None,
+            curves: List[str] = None,
             model: str = 'exp',
             lam: float = 1.0
     ):
@@ -118,6 +120,7 @@ class SimSPD:
         self.model = model
         self.lam = lam
         self.errors = errors
+        self.curves = curves
         self.spds: List[SPD] = []
         self.prob_matrix: Optional[np.ndarray] = None
         self.summary_stats: Optional[np.ndarray] = None
@@ -148,13 +151,13 @@ class SimSPD:
         else:
             raise ValueError("Model not supported yet. Choose between 'uniform' and 'exp'.")
 
-        curve = CALIBRATION_CURVES["intcal20"]
-        c14ages = [curve[np.argmin(np.abs(curve[:, 0] - year)), 1] for year in years]
+        curves = self.curves if self.curves else ["intcal20"] * self.n_dates
+        c14ages = [CALIBRATION_CURVES[curve][np.argmin(np.abs(CALIBRATION_CURVES[curve][:, 0] - year)), 1] for year, curve in zip(years, curves)]
 
         # Randomly sample errors
         errors = np.random.choice(self.errors, self.n_dates) if self.errors else np.random.randint(0, 100, self.n_dates)
 
-        return [Date(c14age, error) for c14age, error in zip(c14ages, errors)]
+        return [Date(c14age, error, curve) for c14age, error, curve in zip(c14ages, errors, curves)]
 
     def simulate_spds(self) -> np.ndarray:
         """
