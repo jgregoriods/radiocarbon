@@ -59,17 +59,28 @@ class SPD:
         self.summed = np.column_stack((age_range, probs))
         return self
 
-    def plot(self) -> None:
+    def plot(self, age: str = 'BP') -> None:
         """
         Plots the summed probability density.
+
+        Args:
+            age (str): The age format to use ('BP' or 'AD'). Default is 'BP'.
         """
         if self.summed is None:
             raise ValueError("Summation must be performed before plotting.")
+        
+        cal_dates = self.summed[:, 0].copy()
+        
+        if age == 'AD':
+            cal_dates = 1950 - cal_dates
 
-        plt.plot(self.summed[:, 0], self.summed[:, 1], color="black")
-        plt.fill_between(self.summed[:, 0], self.summed[:, 1], color="lightgray")
-        plt.gca().invert_xaxis()
-        plt.xlabel("Calibrated Age (BP)")
+        plt.plot(cal_dates, self.summed[:, 1], color="black")
+        plt.fill_between(cal_dates, self.summed[:, 1], color="lightgray")
+
+        if age == 'BP':
+            plt.gca().invert_xaxis()
+
+        plt.xlabel(f"Calibrated Age ({age})")
         plt.ylabel("Probability Density")
         plt.title("Summed Probability Density (SPD)")
         plt.show()
@@ -83,12 +94,10 @@ class SimSPD:
         date_range (Tuple[int, int]): Range of years to simulate (start, end).
         n_dates (int): Number of dates to simulate per iteration.
         n_iter (int): Number of iterations for the simulation.
-        model (str): Model for date generation ('uniform' or 'exp').
         errors (List[int]): List of errors for simulated dates.
         curves (List[str]): List of calibration curves to use.
+        probs (List[float]): List of probabilities for sampling dates.
         spds (List[SPD]): List of simulated SPDs.
-        a (float): Intercept parameter for the exponential model.
-        b (float): Slope parameter for the exponential model.
     """
 
     def __init__(
@@ -98,9 +107,7 @@ class SimSPD:
             n_iter: int = 1000,
             errors: List[int] = None,
             curves: List[str] = None,
-            model: str = 'exp',
-            a: float = -1.0,
-            b: float = -0.1
+            probs: List[float] = None
     ):
         """
         Initializes the SimSPD instance.
@@ -110,9 +117,8 @@ class SimSPD:
             n_dates (int): Number of dates to simulate per iteration.
             n_iter (int): Number of iterations for the simulation. Default is 1000.
             errors (List[int]): List of errors for simulated dates.
-            model (str): Model for date generation ('uniform' or 'exp'). Default is 'exp'.
-            a (float): Intercept parameter for the exponential model. Default is -1.0.
-            b (float): Slope parameter for the exponential model. Default is -0.1.
+            curves (List[str]): List of calibration curves to use.
+            probs (List[float]): List of probabilities for sampling dates.
         """
         if not isinstance(date_range, tuple) or len(date_range) != 2:
             raise ValueError("date_range must be a tuple of (start, end).")
@@ -122,11 +128,9 @@ class SimSPD:
         self.date_range = date_range
         self.n_dates = n_dates
         self.n_iter = n_iter
-        self.model = model
-        self.a = a
-        self.b = b
         self.errors = errors
         self.curves = curves
+        self.probs = probs if probs is not None else np.ones(self.date_range[1] - self.date_range[0]) / (self.date_range[1] - self.date_range[0])
         self.spds: List[SPD] = []
         self.prob_matrix: Optional[np.ndarray] = None
         self.summary_stats: Optional[np.ndarray] = None
@@ -139,23 +143,9 @@ class SimSPD:
             List[Date]: A list of randomly generated `Date` objects.
         """
 
-        # Uniform model
-        if self.model == 'uniform':
-            years = np.random.choice(
-                np.arange(self.date_range[0], self.date_range[1] + 1), self.n_dates, replace=True
-            )
+        X = np.arange(self.date_range[0], self.date_range[1])
 
-        # Exponential model
-        elif self.model == 'exp':
-            probs = np.exp(self.a + self.b * np.arange(self.date_range[0], self.date_range[1]))
-            probs /= probs.sum()
-            years = np.random.choice(
-                np.arange(self.date_range[0], self.date_range[1]), self.n_dates, replace=True, p=probs
-            )
-
-        # Unsupported model
-        else:
-            raise ValueError("Model not supported yet. Choose between 'uniform' and 'exp'.")
+        years = np.random.choice(X, self.n_dates, replace=True, p=self.probs)
 
         curves = self.curves if self.curves else ["intcal20"] * self.n_dates
         c14ages = [CALIBRATION_CURVES[curve][np.argmin(np.abs(CALIBRATION_CURVES[curve][:, 0] - year)), 1] for year, curve in zip(years, curves)]
@@ -267,43 +257,59 @@ class SPDTest:
 
         self.p_value = None
 
-    def run_test(self, n_iter: int = 1000, model: str = 'exp') -> 'SPDTest':
+    def run_test(self, n_iter: int = 1000, model: str = 'exp', probs: List[float] = None) -> 'SPDTest':
         """
         Runs simulations using the same time range and number of dates as the real SPD.
 
         Args:
             n_iter (int): Number of iterations for the simulation. Default is 1000.
-            model (str): Model for date generation ('uniform' or 'exp'). Default is 'exp'.
+            model (str): Model for date generation ('uniform', 'linear', 'exp' or 'custom'). Default is 'exp'.
         """
         errors = [date.c14sd for date in self.spd.dates]
+
         if model == 'exp':
             ages = self.spd.summed[:, 0]
-            probs = self.spd.summed[:, 1] + 1e-10
+            spd_values = self.spd.summed[:, 1] + 1e-10
 
             sel_ages = ages[(ages > self.date_range[0]) & (ages < self.date_range[1])]
             x = np.arange(len(sel_ages))
-            y = probs[(ages > self.date_range[0]) & (ages < self.date_range[1])]
+            y = spd_values[(ages > self.date_range[0]) & (ages < self.date_range[1])]
 
             a, b = curve_fit(lambda x, a, b: np.exp(a + b * x), x, y, p0=(-1.0, -0.1))[0]
-            self.simulations = SimSPD(
-                date_range=self.date_range,
-                n_dates=self.n_dates,
-                n_iter=n_iter,
-                errors=errors,
-                model=model,
-                a=a,
-                b=b
-            )
+            probs = np.exp(a + b * np.arange(self.date_range[0], self.date_range[1]))
+            probs /= probs.sum()
+
+        elif model == 'linear':
+            ages = self.spd.summed[:, 0]
+            spd_values = self.spd.summed[:, 1]
+
+            sel_ages = ages[(ages > self.date_range[0]) & (ages < self.date_range[1])]
+            x = np.arange(len(sel_ages))
+            y = spd_values[(ages > self.date_range[0]) & (ages < self.date_range[1])]
+
+            m, b = np.polyfit(x, y, deg=1)
+            probs = b + m * np.arange(self.date_range[0], self.date_range[1])
+            probs /= probs.sum()
+
         elif model == 'uniform':
-            self.simulations = SimSPD(
-                date_range=self.date_range,
-                n_dates=self.n_dates,
-                n_iter=n_iter,
-                errors=errors,
-                model=model
-            )
+            probs = np.ones(self.date_range[1] - self.date_range[0])
+            probs /= probs.sum()
+
+        elif model == 'custom':
+            if probs is None:
+                raise ValueError("Custom model requires a list of probabilities.")
+            probs = probs
+
         else:
-            raise ValueError("Model not supported yet. Choose between 'uniform' and 'exp'.")
+            raise ValueError("Model not supported yet. Choose between 'uniform', 'linear', 'exp' or 'custom'.")
+
+        self.simulations = SimSPD(
+            date_range=self.date_range,
+            n_dates=self.n_dates,
+            n_iter=n_iter,
+            errors=errors,
+            probs=probs
+        )
 
         self.model = model
         self.n_iter = n_iter
@@ -415,16 +421,30 @@ class SPDTest:
         p_val = np.mean(np.array(score_sums) > observed_z_sum)
         return p_val
 
-    def plot(self):
+    def plot(self, age: str = 'BP'):
         """
         Plots the real SPD overlaid on the simulated confidence intervals.
+
+        Args:
+            age (str): The age format to use ('BP' or 'AD'). Default is 'BP'.
         """
         if self.simulations is None:
             raise ValueError("Simulations must be run before plotting.")
 
+        cal_dates = self.spd.summed[:, 0].copy()
+        sim_dates = self.simulations.prob_matrix[:, 0].copy()
+        start_date = self.date_range[1]
+        end_date = self.date_range[0]
+
+        if age == 'AD':
+            cal_dates = 1950 - cal_dates
+            sim_dates = 1950 - sim_dates
+            start_date = 1950 - start_date
+            end_date = 1950 - end_date
+
         # Plot confidence intervals
         plt.fill_between(
-            self.simulations.prob_matrix[:, 0],  # Age range
+            sim_dates,  # Age range
             self.lower_percentile,  # Lower CI
             self.upper_percentile,  # Upper CI
             color="lightgray",
@@ -433,15 +453,20 @@ class SPDTest:
 
         # Plot the real SPD
         plt.plot(
-            self.spd.summed[:, 0],  # Age range
+            cal_dates,  # Age range
             self.spd.summed[:, 1],  # Probability density
             color="black",
             label="SPD",
         )
 
-        above_intervals, below_intervals = self.intervals["above"], self.intervals["below"]
+        if age == 'AD':
+            above_intervals = [(1950 - end, 1950 - start) for start, end in self.intervals['above']]
+            below_intervals = [(1950 - end, 1950 - start) for start, end in self.intervals['below']]
+        else:
+            above_intervals = self.intervals['above']
+            below_intervals = self.intervals['below']
 
-        # Highlight above intervals in red (only add one legend entry)
+        # Highlight above intervals
         for i, (start, end) in enumerate(above_intervals):
             plt.fill_betweenx(
                 [0, self.spd.summed[:, 1].max()],
@@ -452,7 +477,7 @@ class SPDTest:
                 label="Above CI" if i == 0 else None,
             )
 
-        # Highlight below intervals in blue (only add one legend entry)
+        # Highlight below intervals
         for i, (start, end) in enumerate(below_intervals):
             plt.fill_betweenx(
                 [0, self.spd.summed[:, 1].max()],
@@ -463,11 +488,12 @@ class SPDTest:
                 label="Below CI" if i == 0 else None,
             )
 
-        plt.gca().invert_xaxis()
-        plt.xlim(self.date_range[1], self.date_range[0])
-        plt.xlabel("Calibrated Age (BP)")
+        if age == 'BP':
+            plt.gca().invert_xaxis()
+        plt.xlim(start_date, end_date)
+        plt.xlabel(f"Calibrated Age ({age})")
         plt.ylabel("Probability Density")
-        plt.title("SPD with Simulated Confidence Intervals")
+        plt.title(f"SPD with Simulated CI ({self.model} model)")
         plt.legend()
         plt.show()
 
