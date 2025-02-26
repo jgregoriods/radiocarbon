@@ -34,7 +34,7 @@ class Date:
         self.curve = curve
         self.cal_date: Optional[np.ndarray] = None
 
-    def calibrate(self) -> None:
+    def calibrate(self) -> 'Date':
         """
         Calibrates the radiocarbon date.
         """
@@ -62,6 +62,8 @@ class Date:
         normalized_probs = probs_interp / np.sum(probs_interp)
 
         self.cal_date = np.column_stack((calbp_interp, probs_interp, normalized_probs))
+
+        return self
 
     def mean(self) -> float:
         """
@@ -213,12 +215,13 @@ class Dates:
         self.curves = curves if curves is not None else ['intcal20'] * len(c14ages)
         self.dates = [Date(age, sd, curve) for age, sd, curve in zip(c14ages, c14sds, self.curves)]
 
-    def calibrate(self) -> None:
+    def calibrate(self) -> 'Dates':
         """
         Calibrates all radiocarbon dates in the collection.
         """
         for date in self.dates:
             date.calibrate()
+        return self
 
     def __getitem__(self, i: int) -> Date:
         """
@@ -264,12 +267,15 @@ class Bins:
             labels (List[str]): A list of labels (ideally site names) corresponding to each date.
             bin_size (int): Size of the bins in years.
         """
+
+        if len(dates) != len(labels):
+            raise ValueError("The number of dates and labels must be equal.")
+
         self.dates = dates
         self.labels = labels
         self.bin_size = bin_size
-        self.bins = self._bin_dates()
 
-    def _bin_dates(self) -> Dates:
+    def bin_dates(self) -> Dates:
         """
         Bins the radiocarbon dates.
 
@@ -277,10 +283,15 @@ class Bins:
             Dates: A Dates object containing the binned radiocarbon dates.
         """
         sites = {}
+
+        for date in self.dates:
+            if date.cal_date is None:
+                date.calibrate()
+
         for i, label in enumerate(self.labels):
             if label not in sites:
                 sites[label] = {}
-            bin_key = self.dates[i].c14age // self.bin_size
+            bin_key = self.dates[i].median() // self.bin_size
             if bin_key not in sites[label]:
                 sites[label][bin_key] = []
             sites[label][bin_key].append(self.dates[i])

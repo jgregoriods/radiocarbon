@@ -30,14 +30,12 @@ pip install radiocarbon
 from radiocarbon import Date, Dates
 
 # Create a single radiocarbon date
-date = Date(c14age=3000, c14sd=30, curve="intcal20")
-date.calibrate()
+date = Date(c14age=3000, c14sd=30, curve="intcal20").calibrate()
 
 # Calibrate multiple dates
-dates = Dates(c14ages=[3000, 3200, 3100], c14sds=[30, 25, 35], curves=["intcal20", "intcal20", "shcal20"])
-dates.calibrate()
+dates = Dates(c14ages=[3000, 3200, 3100], c14sds=[30, 25, 35], curves=["intcal20", "intcal20", "shcal20"]).calibrate()
 
-# Plot a calibrated date
+# Plot a single calibrated date
 date.plot()
 ```
 
@@ -51,8 +49,7 @@ from radiocarbon import Dates
 df = pd.read_csv("dates.csv")
 
 # Create a Dates object from the DataFrame
-dates = Dates(df["c14age"], df["c14sd"], df["curve"])
-dates.calibrate()
+dates = Dates(df["c14age"], df["c14sd"], df["curve"]).calibrate()
 ```
 
 ### Calculating Summed Probability Distributions (SPDs)
@@ -61,8 +58,7 @@ dates.calibrate()
 from radiocarbon import SPD
 
 # Create an SPD from a collection of dates
-spd = SPD(dates)
-spd.sum()
+spd = SPD(dates).sum()
 
 # Plot the SPD
 spd.plot()
@@ -74,8 +70,7 @@ spd.plot()
 from radiocarbon import SPDTest
 
 # Test an observed SPD against simulations
-spd_test = SPDTest(spd, date_range=(3000, 3500))
-spd_test.simulate(n_iter=1000, model="uniform")
+spd_test = SPDTest(spd, date_range=(3000, 3500)).run_test(n_iter=1000, model="uniform")
 spd_test.plot()
 ```
 
@@ -91,10 +86,9 @@ df = pd.read_csv("dates.csv")
 dates = Dates(df["c14age"], df["c14sd"], df["curve"])
 
 # Bin the dates by site using a window of 100 years
-bins = Bins(dates, labels=df["site"], bin_size=100)
+bins = Bins(dates, labels=df["site"], bin_size=100).bin_dates()
 
 # Calculate the SPD from the binned dates
-spd = SPD(bins.bins)
-spd.sum()
+spd = SPD(bins.bins).sum()
 spd.plot()
 ```

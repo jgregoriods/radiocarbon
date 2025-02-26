@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Tuple, Optional, Dict, Union
+from scipy.optimize import curve_fit
 
 from .calibration_curves import CALIBRATION_CURVES
 from .date import Date, Dates
@@ -35,7 +36,7 @@ class SPD:
                 raise TypeError("Each date must have a `calibrate` method.")
             date.calibrate()
 
-    def sum(self) -> None:
+    def sum(self) -> 'SPD':
         """
         Sums the probability densities of all calibrated dates.
         """
@@ -56,6 +57,7 @@ class SPD:
             )
 
         self.summed = np.column_stack((age_range, probs))
+        return self
 
     def plot(self) -> None:
         """
@@ -82,10 +84,11 @@ class SimSPD:
         n_dates (int): Number of dates to simulate per iteration.
         n_iter (int): Number of iterations for the simulation.
         model (str): Model for date generation ('uniform' or 'exp').
-        lam (float): Lambda parameter for the exponential model.
         errors (List[int]): List of errors for simulated dates.
         curves (List[str]): List of calibration curves to use.
         spds (List[SPD]): List of simulated SPDs.
+        a (float): Intercept parameter for the exponential model.
+        b (float): Slope parameter for the exponential model.
     """
 
     def __init__(
@@ -96,7 +99,8 @@ class SimSPD:
             errors: List[int] = None,
             curves: List[str] = None,
             model: str = 'exp',
-            lam: float = 1.0
+            a: float = -1.0,
+            b: float = -0.1
     ):
         """
         Initializes the SimSPD instance.
@@ -107,7 +111,8 @@ class SimSPD:
             n_iter (int): Number of iterations for the simulation. Default is 1000.
             errors (List[int]): List of errors for simulated dates.
             model (str): Model for date generation ('uniform' or 'exp'). Default is 'exp'.
-            lam (float): Lambda parameter for the exponential model. Default is 1.0.
+            a (float): Intercept parameter for the exponential model. Default is -1.0.
+            b (float): Slope parameter for the exponential model. Default is -0.1.
         """
         if not isinstance(date_range, tuple) or len(date_range) != 2:
             raise ValueError("date_range must be a tuple of (start, end).")
@@ -118,7 +123,8 @@ class SimSPD:
         self.n_dates = n_dates
         self.n_iter = n_iter
         self.model = model
-        self.lam = lam
+        self.a = a
+        self.b = b
         self.errors = errors
         self.curves = curves
         self.spds: List[SPD] = []
@@ -141,7 +147,7 @@ class SimSPD:
 
         # Exponential model
         elif self.model == 'exp':
-            probs = np.exp(-self.lam * np.arange(self.date_range[0], self.date_range[1]))
+            probs = np.exp(self.a + self.b * np.arange(self.date_range[0], self.date_range[1]))
             probs /= probs.sum()
             years = np.random.choice(
                 np.arange(self.date_range[0], self.date_range[1]), self.n_dates, replace=True, p=probs
@@ -261,7 +267,7 @@ class SPDTest:
 
         self.p_value = None
 
-    def run_test(self, n_iter: int = 1000, model: str = 'exp') -> None:
+    def run_test(self, n_iter: int = 1000, model: str = 'exp') -> 'SPDTest':
         """
         Runs simulations using the same time range and number of dates as the real SPD.
 
@@ -274,17 +280,19 @@ class SPDTest:
             ages = self.spd.summed[:, 0]
             probs = self.spd.summed[:, 1] + 1e-10
 
-            x = ages[(ages > self.date_range[0]) & (ages < self.date_range[1])]
+            sel_ages = ages[(ages > self.date_range[0]) & (ages < self.date_range[1])]
+            x = np.arange(len(sel_ages))
             y = probs[(ages > self.date_range[0]) & (ages < self.date_range[1])]
 
-            lam = -np.polyfit(x, np.log(y), 1)[0]
+            a, b = curve_fit(lambda x, a, b: np.exp(a + b * x), x, y, p0=(-1.0, -0.1))[0]
             self.simulations = SimSPD(
                 date_range=self.date_range,
                 n_dates=self.n_dates,
                 n_iter=n_iter,
                 errors=errors,
                 model=model,
-                lam=lam
+                a=a,
+                b=b
             )
         elif model == 'uniform':
             self.simulations = SimSPD(
@@ -302,6 +310,8 @@ class SPDTest:
         self.simulations.simulate_spds()
         self.intervals["above"], self.intervals["below"] = self._extract_intervals()
         self.p_value = self._calculate_p_value()
+
+        return self
 
     def _get_percentile_bounds(self, prob_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
