@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy.cluster.hierarchy as sch
 from typing import List, Optional, Tuple, Dict, Union
 
 from .calibration_curves import CALIBRATION_CURVES
@@ -12,27 +13,30 @@ class Date:
     Attributes:
         c14age (int): Radiocarbon age in years BP.
         c14sd (int): Standard deviation of the radiocarbon age.
+        curve (str): Name of the calibration curve to use.
         cal_date (Optional[np.ndarray]): Calibrated date as a numpy array with columns:
                                          [calibrated age, probability, normalized probability].
+        bin_id (Optional[str]): Id of the bin the date belongs to.
     """
 
-    def __init__(self, c14age: int, c14sd: int, curve: Optional[str] = 'intcal20'):
+    def __init__(self, c14age: int, c14sd: int, curve: Optional[str] = None, bin_id: Optional[str] = None):
         """
         Initializes a radiocarbon date.
 
         Args:
             c14age (int): Radiocarbon age in years BP.
             c14sd (int): Standard deviation of the radiocarbon age.
-            curve (Optional[str]): Name of the calibration curve to use. Defaults to 'intcal20'.
+            curve (Optional[str]): Name of the calibration curve to use.
         """
 
-        if curve not in CALIBRATION_CURVES:
+        if curve and curve not in CALIBRATION_CURVES:
             raise ValueError(f"Curve '{curve}' is not available.")
 
         self.c14age = c14age
         self.c14sd = c14sd
-        self.curve = curve
+        self.curve = curve if curve else 'intcal20'
         self.cal_date: Optional[np.ndarray] = None
+        self.bin_id = bin_id
 
     def calibrate(self) -> 'Date':
         """
@@ -197,23 +201,14 @@ class Dates:
         curves (Optional[List[str]]): A list of calibration curve names corresponding to each date.
     """
 
-    def __init__(self, c14ages: List[int], c14sds: List[int], curves: Optional[List[str]] = None):
+    def __init__(self, dates: List[Date]):
         """
         Initializes a collection of radiocarbon dates.
 
         Args:
-            c14ages (List[int]): List of radiocarbon ages in years BP.
-            c14sds (List[int]): List of standard deviations of the radiocarbon ages.
-            curves (Optional[List[str]]): List of calibration curve names for each date.
+            dates (List[Date]): A list of Date objects.
         """
-        if len(c14ages) != len(c14sds):
-            raise ValueError("The number of radiocarbon ages and standard deviations must be equal.")
-
-        if curves is not None and len(c14ages) != len(curves):
-            raise ValueError("The number of curves must match the number of radiocarbon dates.")
-
-        self.curves = curves if curves is not None else ['intcal20'] * len(c14ages)
-        self.dates = [Date(age, sd, curve) for age, sd, curve in zip(c14ages, c14sds, self.curves)]
+        self.dates = dates
 
     def calibrate(self) -> 'Dates':
         """
@@ -222,6 +217,30 @@ class Dates:
         for date in self.dates:
             date.calibrate()
         return self
+
+    @staticmethod
+    def from_df(df: 'pd.DataFrame', age_col: str, sd_col: str, curve_col: Optional[str] = None) -> 'Dates':
+        """
+        Creates a Dates object from a pandas DataFrame.
+
+        Args:
+            df (pd.DataFrame): A pandas DataFrame containing the radiocarbon dates.
+            age_col (str): Name of the column containing the radiocarbon ages.
+            sd_col (str): Name of the column containing the standard deviations of the radiocarbon ages.
+            curve_col (Optional[str]): Name of the column containing the calibration curve names.
+
+        Returns:
+            Dates: A Dates object containing the radiocarbon dates.
+        """
+        c14ages = df[age_col].tolist()
+        c14sds = df[sd_col].tolist()
+        curves = df[curve_col].tolist() if curve_col is not None else None
+
+        date_list = []
+        for i in range(len(c14ages)):
+            date_list.append(Date(c14ages[i], c14sds[i], curves[i] if curves else None))
+
+        return Dates(date_list)
 
     def __getitem__(self, i: int) -> Date:
         """
@@ -258,14 +277,14 @@ class Bins:
         bin_size (int): Size of the bins in years.
         bins (Dates): A Dates object containing the binned radiocarbon dates.
     """
-    def __init__(self, dates: Dates, labels: List[str], bin_size: int = 100):
+    def __init__(self, dates: Dates, labels: List[str], h: int = 100):
         """
         Initializes a collection of binned radiocarbon dates.
 
         Args:
             dates (Dates): A Dates object containing the radiocarbon dates.
             labels (List[str]): A list of labels (ideally site names) corresponding to each date.
-            bin_size (int): Size of the bins in years.
+            h (int): Height to cut the dendrogram at. Defaults to 100.
         """
 
         if len(dates) != len(labels):
@@ -273,7 +292,7 @@ class Bins:
 
         self.dates = dates
         self.labels = labels
-        self.bin_size = bin_size
+        self.h = h
 
     def bin_dates(self) -> Dates:
         """
@@ -290,18 +309,23 @@ class Bins:
 
         for i, label in enumerate(self.labels):
             if label not in sites:
-                sites[label] = {}
-            bin_key = self.dates[i].median() // self.bin_size
-            if bin_key not in sites[label]:
-                sites[label][bin_key] = []
-            sites[label][bin_key].append(self.dates[i])
-        filtered_ages = []
-        filtered_errors = []
-        filtered_curves = []
-        for label in sites:
-            for bin_key in sites[label]:
-                filtered_ages.append(sites[label][bin_key][0].c14age)
-                filtered_errors.append(sites[label][bin_key][0].c14sd)
-                filtered_curves.append(sites[label][bin_key][0].curve)
-        return Dates(filtered_ages, filtered_errors, filtered_curves)
+                sites[label] = []
+            sites[label].append(self.dates[i])
+
+        binned_dates = []
+
+        for site in sites:
+            date_array = np.array([date.median() for date in sites[site]]).reshape(-1, 1)
+            if len(date_array) == 1:
+                site_date = sites[site][0]
+                site_date.bin_id = f'{site}_1'
+                binned_dates.append(site_date)
+                continue
+            linkage_matrix = sch.linkage(date_array, method='ward')
+            clusters = sch.fcluster(linkage_matrix, t=self.h, criterion='distance')
+            for i, date in enumerate(sites[site]):
+                date.bin_id = f'{site}_{clusters[i]}'
+                binned_dates.append(date)
+
+        return Dates(binned_dates)
 

@@ -73,22 +73,3 @@ from radiocarbon import SPDTest
 spd_test = SPDTest(spd, date_range=(3000, 3500)).run_test(n_iter=1000, model="uniform")
 spd_test.plot()
 ```
-
-### Binning Dates
-
-Binning can be performed to account for oversampling.
-
-```python
-from radiocarbon import Dates, Bins, SPD
-
-# Create a Dates object
-df = pd.read_csv("dates.csv")
-dates = Dates(df["c14age"], df["c14sd"], df["curve"])
-
-# Bin the dates by site using a window of 100 years
-bins = Bins(dates, labels=df["site"], bin_size=100).bin_dates()
-
-# Calculate the SPD from the binned dates
-spd = SPD(bins.bins).sum()
-spd.plot()
-```
