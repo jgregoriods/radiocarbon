@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import json
+
 import scipy.cluster.hierarchy as sch
 from typing import List, Optional, Tuple, Dict, Union
 
@@ -177,6 +179,38 @@ class Date:
         plt.ylabel('Probability density')
         plt.show()
 
+    def to_json(self) -> str:
+        """
+        Converts the radiocarbon date to a JSON string.
+
+        Returns:
+            str: A JSON string representing the radiocarbon date.
+        """
+        return json.dumps({
+            'c14age': self.c14age,
+            'c14sd': self.c14sd,
+            'curve': self.curve,
+            'cal_date': self.cal_date.tolist() if self.cal_date is not None else None,
+            'bin_id': self.bin_id
+        })
+
+    @staticmethod
+    def from_json(json_str: str) -> 'Date':
+        """
+        Creates a Date object from a JSON string.
+
+        Args:
+            json_str (str): A JSON string representing the radiocarbon date.
+
+        Returns:
+            Date: A Date object.
+        """
+        data = json.loads(json_str)
+        date = Date(data['c14age'], data['c14sd'], data['curve'], data['bin_id'])
+        if data['cal_date']:
+            date.cal_date = np.array(data['cal_date'])
+        return date
+
     def __repr__(self) -> str:
         """
         Returns a string representation of the radiocarbon date.
@@ -232,6 +266,9 @@ class Dates:
         Returns:
             Dates: A Dates object containing the radiocarbon dates.
         """
+        df[age_col] = df[age_col].astype(int)
+        df[sd_col] = df[sd_col].astype(int)
+
         c14ages = df[age_col].tolist()
         c14sds = df[sd_col].tolist()
         curves = df[curve_col].tolist() if curve_col is not None else None

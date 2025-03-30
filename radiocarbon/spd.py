@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import json
 from typing import List, Tuple, Optional, Dict, Union
 from scipy.optimize import curve_fit
 
@@ -84,6 +85,35 @@ class SPD:
         plt.ylabel("Probability Density")
         plt.title("Summed Probability Density (SPD)")
         plt.show()
+
+    def to_json(self) -> str:
+        """
+        Converts the SPD to a JSON string.
+
+        Returns:
+            str: The JSON representation of the SPD.
+        """
+        return json.dumps({
+            'dates': [date.to_json() for date in self.dates],
+            'summed': self.summed.tolist() if self.summed is not None else None
+        })
+
+    @staticmethod
+    def from_json(json_string: str) -> 'SPD':
+        """
+        Creates an SPD object from a JSON string.
+
+        Args:
+            json_string (str): The JSON string to parse.
+
+        Returns:
+            SPD: The SPD object parsed from the JSON string.
+        """
+        data = json.loads(json_string)
+        dates = Dates([Date.from_json(date) for date in data['dates']])
+        spd = SPD(dates)
+        spd.summed = np.array(data['summed']) if data['summed'] is not None else None
+        return spd
 
 
 class SimSPD:

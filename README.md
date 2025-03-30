@@ -49,7 +49,7 @@ from radiocarbon import Dates
 df = pd.read_csv("dates.csv")
 
 # Create a Dates object from the DataFrame
-dates = Dates(df["c14age"], df["c14sd"], df["curve"]).calibrate()
+dates = Dates.from_df(df, "c14age", "c14sd", "curve").calibrate()
 ```
 
 ### Calculating Summed Probability Distributions (SPDs)
