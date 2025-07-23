@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import json
+from collections import defaultdict
 
 import scipy.cluster.hierarchy as sch
 from typing import List, Optional, Tuple, Dict, Union
@@ -273,74 +274,19 @@ class Dates:
 
         return Dates(date_list)
 
-    def __getitem__(self, i: int) -> Date:
+    def bin(self, labels: List[str], h: int = 100) -> 'Dates':
         """
-        Returns the radiocarbon date at the specified index.
+        Bins the radiocarbon dates by a specified bin size.
         """
-        return self.dates[i]
-
-    def __len__(self) -> int:
-        """
-        Returns the number of radiocarbon dates in the collection.
-        """
-        return len(self.dates)
-
-    def __repr__(self) -> str:
-        """
-        Returns a string representation of the collection of radiocarbon dates.
-        """
-        return '\n'.join([date.__repr__() for date in self.dates])
-
-    def __iter__(self):
-        """
-        Returns an iterator over the radiocarbon dates.
-        """
-        return iter(self.dates)
-
-
-class Bins:
-    """
-    Represents a collection of radiocarbon dates binned by a specified bin size.
-
-    Attributes:
-        dates (Dates): A Dates object containing the radiocarbon dates.
-        labels (List[str]): A list of labels (ideally site names) corresponding to each date.
-        bin_size (int): Size of the bins in years.
-        bins (Dates): A Dates object containing the binned radiocarbon dates.
-    """
-    def __init__(self, dates: Dates, labels: List[str], h: int = 100):
-        """
-        Initializes a collection of binned radiocarbon dates.
-
-        Args:
-            dates (Dates): A Dates object containing the radiocarbon dates.
-            labels (List[str]): A list of labels (ideally site names) corresponding to each date.
-            h (int): Height to cut the dendrogram at. Defaults to 100.
-        """
-
-        if len(dates) != len(labels):
+        if len(self.dates) != len(labels):
             raise ValueError("The number of dates and labels must be equal.")
-
-        self.dates = dates
-        self.labels = labels
-        self.h = h
-
-    def bin_dates(self) -> Dates:
-        """
-        Bins the radiocarbon dates.
-
-        Returns:
-            Dates: A Dates object containing the binned radiocarbon dates.
-        """
-        sites = {}
 
         for date in self.dates:
             if date.cal_date is None:
                 date.calibrate()
 
-        for i, label in enumerate(self.labels):
-            if label not in sites:
-                sites[label] = []
+        sites = defaultdict(list)
+        for i, label in enumerate(labels):
             sites[label].append(self.dates[i])
 
         binned_dates = []
@@ -353,10 +299,33 @@ class Bins:
                 binned_dates.append(site_date)
                 continue
             linkage_matrix = sch.linkage(date_array, method='ward')
-            clusters = sch.fcluster(linkage_matrix, t=self.h, criterion='distance')
+            clusters = sch.fcluster(linkage_matrix, t=h, criterion='distance')
             for i, date in enumerate(sites[site]):
                 date.bin_id = f'{site}_{clusters[i]}'
                 binned_dates.append(date)
 
-        return Dates(binned_dates)
+        return self
 
+    def __getitem__(self, i: int) -> Date:
+        """
+        Returns the radiocarbon date at the specified index.
+        """
+        return self.dates[i]
+
+    def __len__(self) -> int:
+        """
+        Returns the number of radiocarbon dates in the collection.
+        """
+        return len(self.dates)
+
+    def __str__(self) -> str:
+        """
+        Returns a string representation of the collection of radiocarbon dates.
+        """
+        return '\n'.join([date.__repr__() for date in self.dates])
+
+    def __iter__(self):
+        """
+        Returns an iterator over the radiocarbon dates.
+        """
+        return iter(self.dates)

@@ -31,6 +31,7 @@ class SPD:
             raise ValueError("The list of dates cannot be empty.")
 
         self.dates = dates
+        self.bins = defaultdict(list)
         self.summed: Optional[np.ndarray] = None
 
         for date in self.dates:
@@ -51,10 +52,24 @@ class SPD:
 
         probs = np.zeros_like(age_range, dtype=float)
 
+        self.bins = defaultdict(list)
         for date in self.dates:
-            probs += np.interp(
-                age_range, date.cal_date[:, 0], date.cal_date[:, 1], left=0, right=0
-            )
+            if date.bin_id:
+                self.bins[date.bin_id].append(date)
+
+        if self.bins:
+            for _, bin_dates in self.bins.items():
+                bin_probs = np.zeros_like(age_range, dtype=float)
+                for date in bin_dates:
+                    bin_probs += np.interp(
+                        age_range, date.cal_date[:, 0], date.cal_date[:, 1], left=0, right=0
+                    )
+                probs += bin_probs / len(bin_dates)
+        else:
+            for date in self.dates:
+                probs += np.interp(
+                    age_range, date.cal_date[:, 0], date.cal_date[:, 1], left=0, right=0
+                )
 
         self.summed = np.column_stack((age_range, probs))
         return self
@@ -68,9 +83,9 @@ class SPD:
         """
         if self.summed is None:
             raise ValueError("Summation must be performed before plotting.")
-        
+
         cal_dates = self.summed[:, 0].copy()
-        
+
         if age == 'AD':
             cal_dates = 1950 - cal_dates
 
@@ -177,7 +192,7 @@ class SimSPD:
             raise NotImplementedError("uncalsample method is not implemented yet.")
 
         X = np.arange(self.date_range[0], self.date_range[1])
-        
+
         years = np.random.choice(X, self.n_dates, replace=True, p=self.probs)
 
         curves = np.random.choice(self.curves, self.n_dates) if self.curves else ['intcal20'] * self.n_dates
@@ -234,7 +249,7 @@ class SimSPD:
             )
 
         return prob_matrix
-    
+
     def _calculate_stats(self, prob_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculates summary statistics (mean and standard deviation) for the probability matrix.
@@ -279,7 +294,7 @@ class SPDTest:
             int(max(date.median() for date in spd.dates)),
         )
 
-        self.n_dates = len(spd.dates)
+        self.n_dates = len(spd.bins) if spd.bins else len(spd.dates)
         self.n_iter = 0
         self.intervals: Dict[str, List[Tuple[int, int]]] = {}
         self.model = None
@@ -297,8 +312,11 @@ class SPDTest:
             n_iter (int): Number of iterations for the simulation. Default is 1000.
             model (str): Model for date generation ('uniform', 'linear', 'exp' or 'custom'). Default is 'exp'.
         """
-        errors = [date.c14sd for date in self.spd.dates]
-        curves = [date.curve for date in self.spd.dates]
+        errors = [np.random.choice([date.c14sd for date in bin]) for bin in self.spd.bins.values()] if self.spd.bins else [date.c14sd for date in self.spd.dates]
+        curves = [np.random.choice([date.curve for date in bin]) for bin in self.spd.bins.values()] if self.spd.bins else [date.curve for date in self.spd.dates]
+
+        # errors = [date.c14sd for date in self.spd.dates]
+        # curves = [date.curve for date in self.spd.dates]
 
         if model == 'exp':
             ages = self.spd.summed[:, 0]
@@ -526,7 +544,7 @@ class SPDTest:
         plt.legend()
         plt.show()
 
-    def __repr__(self) -> str:
+    def __str__(self) -> str:
         """
         Returns the string representation of the SPDTest instance.
 
