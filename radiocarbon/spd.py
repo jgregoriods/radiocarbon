@@ -1,8 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import json
+from collections import defaultdict
 from typing import List, Tuple, Optional, Dict, Union
 from scipy.optimize import curve_fit
+from scipy.interpolate import interp1d
 
 from .calibration_curves import CALIBRATION_CURVES
 from .date import Date, Dates
@@ -31,7 +33,6 @@ class SPD:
         self.dates = dates
         self.summed: Optional[np.ndarray] = None
 
-        # Ensure all dates are calibrated
         for date in self.dates:
             if not hasattr(date, 'calibrate') or not callable(date.calibrate):
                 raise TypeError("Each date must have a `calibrate` method.")
@@ -44,14 +45,12 @@ class SPD:
         if not self.dates:
             raise ValueError("No dates provided for summation.")
 
-        # Define the age range for summation
         min_age = min(date.cal_date[0, 0] for date in self.dates)
         max_age = max(date.cal_date[-1, 0] for date in self.dates)
         age_range = np.arange(min_age, max_age)
 
         probs = np.zeros_like(age_range, dtype=float)
 
-        # Sum the probability densities
         for date in self.dates:
             probs += np.interp(
                 age_range, date.cal_date[:, 0], date.cal_date[:, 1], left=0, right=0
@@ -165,31 +164,34 @@ class SimSPD:
         self.prob_matrix: Optional[np.ndarray] = None
         self.summary_stats: Optional[np.ndarray] = None
 
-    def _generate_random_dates(self) -> List[Date]:
+    def _generate_random_dates(self, method: str = 'calsample') -> List[Date]:
         """
         Generates random `Date` objects based on the specified model.
 
         Returns:
             List[Date]: A list of randomly generated `Date` objects.
         """
+        if method not in ["uncalsample", "calsample"]:
+            raise ValueError("Method must be 'uncalsample' or 'calsample'.")
+        if method == 'uncalsample':
+            raise NotImplementedError("uncalsample method is not implemented yet.")
 
         X = np.arange(self.date_range[0], self.date_range[1])
-
+        
         years = np.random.choice(X, self.n_dates, replace=True, p=self.probs)
 
-        curves = self.curves if self.curves else ["intcal20"] * self.n_dates
+        curves = np.random.choice(self.curves, self.n_dates) if self.curves else ['intcal20'] * self.n_dates
         c14ages = [CALIBRATION_CURVES[curve][np.argmin(np.abs(CALIBRATION_CURVES[curve][:, 0] - year)), 1] for year, curve in zip(years, curves)]
 
-        # Randomly sample errors
         errors = np.random.choice(self.errors, self.n_dates) if self.errors else np.random.randint(0, 100, self.n_dates)
 
         return [Date(c14age, error, curve) for c14age, error, curve in zip(c14ages, errors, curves)]
 
-    def simulate_spds(self) -> np.ndarray:
+    def simulate_spds(self, method: str = 'calsample') -> np.ndarray:
         """
         Simulates SPDs and calculates percentile bounds.
         """
-        self.spds = [self._create_spd(self._generate_random_dates())
+        self.spds = [self._create_spd(self._generate_random_dates(method))
                      for _ in range(self.n_iter)]
 
         min_age = min(spd.summed[0, 0] for spd in self.spds)
@@ -287,7 +289,7 @@ class SPDTest:
 
         self.p_value = None
 
-    def run_test(self, n_iter: int = 1000, model: str = 'exp', probs: List[float] = None) -> 'SPDTest':
+    def run_test(self, n_iter: int = 1000, model: str = 'exp', method: str = 'calsample', probs: List[float] = None) -> 'SPDTest':
         """
         Runs simulations using the same time range and number of dates as the real SPD.
 
@@ -296,6 +298,7 @@ class SPDTest:
             model (str): Model for date generation ('uniform', 'linear', 'exp' or 'custom'). Default is 'exp'.
         """
         errors = [date.c14sd for date in self.spd.dates]
+        curves = [date.curve for date in self.spd.dates]
 
         if model == 'exp':
             ages = self.spd.summed[:, 0]
@@ -338,12 +341,13 @@ class SPDTest:
             n_dates=self.n_dates,
             n_iter=n_iter,
             errors=errors,
+            curves=curves,
             probs=probs
         )
 
         self.model = model
         self.n_iter = n_iter
-        self.simulations.simulate_spds()
+        self.simulations.simulate_spds(method)
         self.intervals["above"], self.intervals["below"] = self._extract_intervals()
         self.p_value = self._calculate_p_value()
 
@@ -388,19 +392,19 @@ class SPDTest:
         is_above = None
 
         for i, (age, prob, low, high) in enumerate(zip(observed_ages, observed_probs, lower_ci, upper_ci)):
-            if prob > high:  # Above the envelope
+            if prob > high:
                 if not current_interval or not is_above:
                     current_interval = [age, age]
                     is_above = True
                 else:
                     current_interval[1] = age
-            elif prob < low:  # Below the envelope
+            elif prob < low:
                 if not current_interval or is_above:
                     current_interval = [age, age]
                     is_above = False
                 else:
                     current_interval[1] = age
-            else:  # Within the envelope
+            else:
                 if current_interval:
                     if is_above:
                         above_intervals.append(tuple(current_interval))
@@ -408,7 +412,6 @@ class SPDTest:
                         below_intervals.append(tuple(current_interval))
                     current_interval = []
 
-        # Add any ongoing interval
         if current_interval:
             if is_above:
                 above_intervals.append(tuple(current_interval))
@@ -472,19 +475,17 @@ class SPDTest:
             start_date = 1950 - start_date
             end_date = 1950 - end_date
 
-        # Plot confidence intervals
         plt.fill_between(
-            sim_dates,  # Age range
-            self.lower_percentile,  # Lower CI
-            self.upper_percentile,  # Upper CI
+            sim_dates,
+            self.lower_percentile,
+            self.upper_percentile,
             color="lightgray",
             label="95% CI",
         )
 
-        # Plot the real SPD
         plt.plot(
-            cal_dates,  # Age range
-            self.spd.summed[:, 1],  # Probability density
+            cal_dates,
+            self.spd.summed[:, 1],
             color="black",
             label="SPD",
         )
@@ -496,7 +497,6 @@ class SPDTest:
             above_intervals = self.intervals['above']
             below_intervals = self.intervals['below']
 
-        # Highlight above intervals
         for i, (start, end) in enumerate(above_intervals):
             plt.fill_betweenx(
                 [0, self.spd.summed[:, 1].max()],
@@ -507,7 +507,6 @@ class SPDTest:
                 label="Above CI" if i == 0 else None,
             )
 
-        # Highlight below intervals
         for i, (start, end) in enumerate(below_intervals):
             plt.fill_betweenx(
                 [0, self.spd.summed[:, 1].max()],

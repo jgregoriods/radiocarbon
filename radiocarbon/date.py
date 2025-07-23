@@ -31,12 +31,12 @@ class Date:
             curve (Optional[str]): Name of the calibration curve to use.
         """
 
-        if curve and curve not in CALIBRATION_CURVES:
+        if curve and curve.lower() not in CALIBRATION_CURVES:
             raise ValueError(f"Curve '{curve}' is not available.")
 
         self.c14age = c14age
         self.c14sd = c14sd
-        self.curve = curve if curve else 'intcal20'
+        self.curve = curve.lower() if curve else 'intcal20'
         self.cal_date: Optional[np.ndarray] = None
         self.bin_id = bin_id
 
@@ -47,24 +47,19 @@ class Date:
         calibration_curve = CALIBRATION_CURVES[self.curve]
         time_range = (self.c14age + 1000, self.c14age - 1000)
 
-        # Select the relevant portion of the calibration curve
         selection = calibration_curve[
             (calibration_curve[:, 0] < time_range[0]) & (calibration_curve[:, 0] > time_range[1])
             ]
 
-        # Calculate probabilities
         probs = np.exp(-((self.c14age - selection[:, 1])**2 / (
             2 * (self.c14sd**2 + selection[:, 2]**2)))) / np.sqrt(self.c14sd**2 + selection[:, 2]**2)
 
-        # Filter out negligible probabilities
         calbp = selection[:, 0][probs > 1e-6]
         probs = probs[probs > 1e-6]
 
-        # Interpolate
         calbp_interp = np.arange(calbp.min(), calbp.max() + 1)
         probs_interp = np.interp(calbp_interp, calbp[::-1], probs[::-1])
         
-        # Normalize probabilities
         normalized_probs = probs_interp / np.sum(probs_interp)
 
         self.cal_date = np.column_stack((calbp_interp, probs_interp, normalized_probs))
@@ -116,7 +111,6 @@ class Date:
 
         hpd_region = sorted_cal[cumulative_probs < level]
 
-        # Split the HPD region into continuous segments
         hpd_set = sorted(hpd_region[:, 0])
         hpd_probs = [p for cal, p in zip(
             self.cal_date[:, 0], self.cal_date[:, 2]) if cal in hpd_set]
