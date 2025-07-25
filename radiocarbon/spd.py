@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 from collections import defaultdict
-from typing import List, Tuple, Optional, Dict, Union
+from typing import List, Tuple, Optional, Dict
 from scipy.optimize import curve_fit
 from scipy.interpolate import interp1d
 
@@ -10,7 +10,18 @@ from .calibration_curves import CALIBRATION_CURVES
 from .date import Date, Dates
 
 
-def uncalibrate(cal_years: np.ndarray, cal_probs: np.ndarray, curve: np.ndarray = CALIBRATION_CURVES['intcal20']):
+def uncalibrate(cal_years: np.ndarray, cal_probs: np.ndarray, curve: np.ndarray = CALIBRATION_CURVES['intcal20']) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Converts calibrated years and probabilities to radiocarbon ages using a calibration curve.
+    Args:
+        cal_years (np.ndarray): Array of calibrated years.
+        cal_probs (np.ndarray): Array of probabilities corresponding to the calibrated years.
+        curve (np.ndarray): Calibration curve data, default is 'intcal20'.
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: A tuple containing:
+            - rcarbon_grid: Array of radiocarbon ages.
+            - interpolated_probs: Array of probabilities corresponding to the radiocarbon ages.
+    """
     cal_to_rcarbon = interp1d(
         curve[:, 0],
         curve[:, 1],
@@ -26,11 +37,17 @@ def uncalibrate(cal_years: np.ndarray, cal_probs: np.ndarray, curve: np.ndarray 
     for age, prob in zip(binned, cal_probs):
         rcarbon_probs_dict[age] += prob
 
-    rcarbon_years = np.array(list(rcarbon_probs_dict.keys()))
-    rcarbon_probs = np.array([rcarbon_probs_dict[y] for y in rcarbon_years])
-    rcarbon_probs = rcarbon_probs / rcarbon_probs.sum()
+    min_age = int(np.floor(min(rcarbon_probs_dict.keys())))
+    max_age = int(np.ceil(max(rcarbon_probs_dict.keys())))
+    rcarbon_grid = np.arange(min_age, max_age + 1)
 
-    return rcarbon_years, rcarbon_probs
+    sparse_years = np.array(sorted(rcarbon_probs_dict.keys()))
+    sparse_probs = np.array([rcarbon_probs_dict[y] for y in sparse_years])
+
+    interpolated_probs = np.interp(rcarbon_grid, sparse_years, sparse_probs, left=0, right=0)
+    interpolated_probs /= interpolated_probs.sum()
+
+    return rcarbon_grid, interpolated_probs
 
 
 class SPD:
@@ -216,16 +233,20 @@ class SimSPD:
             years = np.random.choice(X, self.n_dates, replace=True, p=self.probs)
             c14ages = [CALIBRATION_CURVES[curve][np.argmin(np.abs(CALIBRATION_CURVES[curve][:, 0] - year)), 1] for year, curve in zip(years, curves)]
         else:
-            c14ages = []
-            uncal_probs = dict()
-            for i in range(self.n_dates):
-                if curves[i] not in uncal_probs:
-                    uncal_probs[curves[i]] = uncalibrate(X, self.probs, CALIBRATION_CURVES[curves[i]])
-                c14ages.append(np.random.choice(uncal_probs[curves[i]][0], p=uncal_probs[curves[i]][1]))
+            unique_curves = set(curves)
+            uncalibrated_dists = {
+                curve: uncalibrate(np.arange(*self.date_range), self.probs, CALIBRATION_CURVES[curve])
+                for curve in unique_curves
+            }
+            c14ages = [
+                # np.random.choice(uncalibrated_dists[curve][0], p=uncalibrated_dists[curve][1])
+                np.random.choice(uncalibrated_dists[curve][0])
+                for curve in curves
+            ]
 
         return [Date(c14age, error, curve) for c14age, error, curve in zip(c14ages, errors, curves)]
 
-    def simulate_spds(self, method: str = 'calsample') -> np.ndarray:
+    def simulate_spds(self, method: str = 'uncalsample') -> np.ndarray:
         """
         Simulates SPDs and calculates percentile bounds.
         """
@@ -330,7 +351,7 @@ class SPDTest:
 
         self.p_value = None
 
-    def run_test(self, n_iter: int = 1000, model: str = 'exp', method: str = 'calsample', probs: List[float] = None) -> 'SPDTest':
+    def run_test(self, n_iter: int = 1000, model: str = 'exp', method: str = 'uncalsample', probs: List[float] = None) -> 'SPDTest':
         """
         Runs simulations using the same time range and number of dates as the real SPD.
 

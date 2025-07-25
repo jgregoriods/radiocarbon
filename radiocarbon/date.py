@@ -4,7 +4,7 @@ import json
 from collections import defaultdict
 
 import scipy.cluster.hierarchy as sch
-from typing import List, Optional, Tuple, Dict, Union
+from typing import List, Optional
 
 from .calibration_curves import CALIBRATION_CURVES
 
