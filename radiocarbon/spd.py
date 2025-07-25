@@ -10,6 +10,29 @@ from .calibration_curves import CALIBRATION_CURVES
 from .date import Date, Dates
 
 
+def uncalibrate(cal_years: np.ndarray, cal_probs: np.ndarray, curve: np.ndarray = CALIBRATION_CURVES['intcal20']):
+    cal_to_rcarbon = interp1d(
+        curve[:, 0],
+        curve[:, 1],
+        kind='linear',
+        bounds_error=False,
+        fill_value='extrapolate'
+    )
+
+    c14_ages = cal_to_rcarbon(cal_years)
+    binned = np.round(c14_ages).astype(int)
+
+    rcarbon_probs_dict = defaultdict(float)
+    for age, prob in zip(binned, cal_probs):
+        rcarbon_probs_dict[age] += prob
+
+    rcarbon_years = np.array(list(rcarbon_probs_dict.keys()))
+    rcarbon_probs = np.array([rcarbon_probs_dict[y] for y in rcarbon_years])
+    rcarbon_probs = rcarbon_probs / rcarbon_probs.sum()
+
+    return rcarbon_years, rcarbon_probs
+
+
 class SPD:
     """
     Represents a Summed Probability Density (SPD) for a collection of radiocarbon dates.
@@ -53,23 +76,21 @@ class SPD:
         probs = np.zeros_like(age_range, dtype=float)
 
         self.bins = defaultdict(list)
+        bin_id = 0
         for date in self.dates:
             if date.bin_id:
                 self.bins[date.bin_id].append(date)
+            else:
+                self.bins[bin_id].append(date)
+                bin_id += 1
 
-        if self.bins:
-            for _, bin_dates in self.bins.items():
-                bin_probs = np.zeros_like(age_range, dtype=float)
-                for date in bin_dates:
-                    bin_probs += np.interp(
-                        age_range, date.cal_date[:, 0], date.cal_date[:, 1], left=0, right=0
-                    )
-                probs += bin_probs / len(bin_dates)
-        else:
-            for date in self.dates:
-                probs += np.interp(
+        for _, bin_dates in self.bins.items():
+            bin_probs = np.zeros_like(age_range, dtype=float)
+            for date in bin_dates:
+                bin_probs += np.interp(
                     age_range, date.cal_date[:, 0], date.cal_date[:, 1], left=0, right=0
                 )
+            probs += bin_probs / len(bin_dates)
 
         self.summed = np.column_stack((age_range, probs))
         return self
@@ -149,8 +170,8 @@ class SimSPD:
             date_range: Tuple[int, int],
             n_dates: int,
             n_iter: int = 1000,
-            errors: List[int] = None,
-            curves: List[str] = None,
+            errors: List[List[int]] = None,
+            curves: List[List[str]] = None,
             probs: List[float] = None
     ):
         """
@@ -186,19 +207,21 @@ class SimSPD:
         Returns:
             List[Date]: A list of randomly generated `Date` objects.
         """
-        if method not in ["uncalsample", "calsample"]:
-            raise ValueError("Method must be 'uncalsample' or 'calsample'.")
-        if method == 'uncalsample':
-            raise NotImplementedError("uncalsample method is not implemented yet.")
-
         X = np.arange(self.date_range[0], self.date_range[1])
 
-        years = np.random.choice(X, self.n_dates, replace=True, p=self.probs)
+        curves = [np.random.choice(curve) for curve in self.curves] if self.curves else ['intcal20'] * self.n_dates
+        errors = [np.random.choice(error) for error in self.errors] if self.errors else np.random.randint(0, 100, self.n_dates)
 
-        curves = np.random.choice(self.curves, self.n_dates) if self.curves else ['intcal20'] * self.n_dates
-        c14ages = [CALIBRATION_CURVES[curve][np.argmin(np.abs(CALIBRATION_CURVES[curve][:, 0] - year)), 1] for year, curve in zip(years, curves)]
-
-        errors = np.random.choice(self.errors, self.n_dates) if self.errors else np.random.randint(0, 100, self.n_dates)
+        if method == 'calsample':
+            years = np.random.choice(X, self.n_dates, replace=True, p=self.probs)
+            c14ages = [CALIBRATION_CURVES[curve][np.argmin(np.abs(CALIBRATION_CURVES[curve][:, 0] - year)), 1] for year, curve in zip(years, curves)]
+        else:
+            c14ages = []
+            uncal_probs = dict()
+            for i in range(self.n_dates):
+                if curves[i] not in uncal_probs:
+                    uncal_probs[curves[i]] = uncalibrate(X, self.probs, CALIBRATION_CURVES[curves[i]])
+                c14ages.append(np.random.choice(uncal_probs[curves[i]][0], p=uncal_probs[curves[i]][1]))
 
         return [Date(c14age, error, curve) for c14age, error, curve in zip(c14ages, errors, curves)]
 
@@ -206,6 +229,9 @@ class SimSPD:
         """
         Simulates SPDs and calculates percentile bounds.
         """
+        if method not in ["uncalsample", "calsample"]:
+            raise ValueError("Method must be 'uncalsample' or 'calsample'.")
+
         self.spds = [self._create_spd(self._generate_random_dates(method))
                      for _ in range(self.n_iter)]
 
@@ -294,7 +320,7 @@ class SPDTest:
             int(max(date.median() for date in spd.dates)),
         )
 
-        self.n_dates = len(spd.bins) if spd.bins else len(spd.dates)
+        self.n_dates = len(spd.bins)
         self.n_iter = 0
         self.intervals: Dict[str, List[Tuple[int, int]]] = {}
         self.model = None
@@ -312,11 +338,9 @@ class SPDTest:
             n_iter (int): Number of iterations for the simulation. Default is 1000.
             model (str): Model for date generation ('uniform', 'linear', 'exp' or 'custom'). Default is 'exp'.
         """
-        errors = [np.random.choice([date.c14sd for date in bin]) for bin in self.spd.bins.values()] if self.spd.bins else [date.c14sd for date in self.spd.dates]
-        curves = [np.random.choice([date.curve for date in bin]) for bin in self.spd.bins.values()] if self.spd.bins else [date.curve for date in self.spd.dates]
 
-        # errors = [date.c14sd for date in self.spd.dates]
-        # curves = [date.curve for date in self.spd.dates]
+        errors = [[date.c14sd for date in bin] for bin in self.spd.bins.values()]
+        curves = [[date.curve for date in bin] for bin in self.spd.bins.values()]
 
         if model == 'exp':
             ages = self.spd.summed[:, 0]
